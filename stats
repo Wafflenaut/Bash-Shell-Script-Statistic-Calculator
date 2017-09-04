@@ -1,0 +1,278 @@
+#!/bin/bash
+
+###################################################################
+#Created by John Moyer
+#Accepts one or two arguments
+#The first argument represents whether rows or columns are to be analyzed
+#The second, if listed, has the input file containing a table of values
+#If no second argument is used, the user manually enters the values
+# stats {-rows|-cols} [input_file]
+
+#Create unique temp files for input and processing
+dataFile="tempInputFile$$"
+sortedFile="tempSortedFile$$"
+rowHolder="tempRowHolder$$"
+averageHolder="tempAverages$$"
+medianHolder="tempMedians$$"
+
+#trap to remove files in case of unexpected exit
+trap "rm -f $dataFile $sortedFile $rowHolder $averageHolder $medianHolder; echo 'Exiting Stats...'; exit 1" INT HUP TERM
+
+sum=0
+median=0
+average=0
+numColumns=0
+numRows=0
+timesRun=0
+medianPlace=0
+medianCount=1
+counter=1
+
+#errors for incorrect usage or inability to read files
+usageError="./stats {-rows|-cols} [file]"
+readError="./stats: cannot read $2"
+
+
+###################################################################
+#Counts number of columns on table file that is passed in
+function countColumns {
+
+	#While loop reads first line from dataFile and iterates through
+	#the values, counting them (the number of columns) as each one
+	#is checked
+	while read myLine && (( "$timesRun" != 1 ))
+	do
+		for i in $myLine
+		do	
+			numColumns=$(expr $numColumns + 1)
+		done
+	
+		#sets timesRun to 1 so this will only be run once
+		timesRun=1
+		
+	done < $1 
+}
+
+###################################################################
+#Counts number of rows on a table file  that is passed in
+function countRows {
+
+	while read myLine
+	do
+		numRows=$(expr $numRows + 1)
+	done < $1
+
+}
+
+###################################################################
+#Finds the location of the median
+function findMedianPlace {
+
+	medianPlace=$(expr $1 / 2 + 1)
+
+}
+
+###################################################################
+#Processing for when rows were chosen by user
+function processRows {
+	printf "Average\tMedian\n"
+	
+	#Run function to count the number of columns (how many vals)
+	countColumns $dataFile
+	
+
+	#Run function to determine median location
+	findMedianPlace $numColumns	
+	
+	
+	#Sorts the data by row
+	while read myLine
+	do
+		#writes the current line to a temp file
+		#then cats pipes that row, transcribing it into columns, sorts 
+		#numerically, then pipes to transcribe back to a row, then appends
+		#to a sorted file
+		echo "$myLine" > $rowHolder
+		cat $rowHolder | tr "\t" "\n" | sort -g | tr "\n" "\t" >> $sortedFile
+		#adds a newline to the end of the line
+		echo "" >> $sortedFile
+	done < $dataFile
+
+	#reads every line of the sorted file to get mean/median
+	while read myLine
+	do
+		sum=0
+		medianCount=1		
+		for i in $myLine
+		do
+			#adds the value of i to the sum of all values
+			sum=$(expr $sum + $i)
+			
+			#checks to see if the current position is the
+			#median, if it is, set it to the current value
+			#of i
+			if [ "$medianCount" = "$medianPlace" ]
+			then
+				
+				median=$i
+				
+			fi
+			#increments the median count value
+			medianCount=$(expr $medianCount + 1 )
+		done
+
+	#calculates average using the method described in assignment
+	#to round up values and using the number of columns (values)
+	# (a + (b / 2)) / b
+	average=$(expr \( $sum + \( $numColumns / 2 \) \) / $numColumns )	
+	
+	#prints average and median
+	echo -e "$average\t$median"	
+
+	done < $sortedFile		
+}
+
+###################################################################
+#Processes when columns are selected
+function processCols {
+
+	#determine number of rows (elements)	
+	countRows $dataFile
+
+	#determine number of cols (sets of elements)
+	countColumns $dataFile
+
+	#determine the place of the median based on number of elements
+	findMedianPlace $numRows	
+	
+	#set counter to 1 (first column to cut)
+	counter=1
+
+	
+
+	#cuts the columns of the input file, sorts them, and converst them to rows
+	while [ "$counter" -le "$numColumns" ] 
+	do
+		#cut the counter column of the dataFile, pipe to sort, then transcribe
+		#from newlines to tabs to turn into a column, append to sorted file
+		cut -f $counter $dataFile | sort -g | tr "\n" "\t" >> $sortedFile
+		
+		#add a carriage return to the line
+		echo "" >> $sortedFile
+		#increment counter
+		counter=$(expr $counter + 1)
+
+	done < $dataFile
+
+	#initial setup for temp files to hold the column stats
+	echo "Averages:" > $averageHolder
+	echo "Medians:" > $medianHolder
+	
+
+	#performs calculations on the each row (formerly columns) to determine the 
+	#mean and median - reads in and process every line from sortedFile	
+	while read myLine
+	do
+
+		sum=0
+		medianCount=1
+		for i in $myLine
+		do
+			#adds the value of i to the sum of all values
+			sum=$(expr $sum + $i)
+
+			#checks to see if the curent position is the
+			#median, if it is, set it to the current value of i
+			if [ "$medianCount" = "$medianPlace" ]
+			then
+
+				median=$i
+
+			fi
+			#increments the median count value
+			medianCount=$(expr $medianCount + 1)
+		done
+
+		average=$(expr \( $sum + \( $numRows / 2 \) \) / $numRows )
+		
+		#print the average and median to their respective files followed by a tab
+		printf "%d\t" $average >> $averageHolder
+		printf "%d\t" $median >> $medianHolder		
+		
+	done < $sortedFile
+
+	#Add a carriage return at the end of average and median holders
+	echo "" >> $averageHolder
+	echo "" >> $medianHolder
+
+	#print the stats via cat
+	cat $averageHolder
+	cat $medianHolder
+}
+
+###################################################################
+#Body of main program processing
+
+if [ "$#" = "1" ]
+then
+	#if there is one argument, send cat to the temp input file
+	cat > "$dataFile"
+	
+elif [ "$#" = "2" ]
+then
+	#test to see exists and is readable
+	if [[ -f $2 && -r $2 ]];
+	then
+		#If two arguements, set datafile to second argument
+		cat $2 > "$dataFile"
+		
+	else
+		#the file is either not readable or doesn't exist
+		echo $readError 1>&2
+		#remove temp files before exit with error flag
+		rm -f $dataFile
+		rm -f $rowHolder
+		rm -f $sortedFile
+		rm -f $averageHolder
+		rm -f $medianHolder
+		exit 1
+	fi
+else
+	#0 or >2 Arguments
+	#echo usageError message to stderr and set exit to 1 (error)
+	echo "$usageError" 1>&2
+	#remove temp files before exit with error flag
+	rm -f $dataFile
+	rm -f $rowHolder
+	rm -f $sortedFile
+	rm -f $averageHolder
+	rm -f $medianHolder
+	exit 1
+fi
+
+if [[ $1 = -r* ]];
+then
+	#the first argument begins with -r, rows were chosen
+	processRows
+elif [[ $1 = -c* ]];
+then
+	#the first argument begins with -c, columns were chosen
+	processCols
+else
+	#error - invalid flag
+	echo "$usageError" 1>&2
+	#remove temp files before exit with error flag	
+	rm -f $dataFile
+	rm -f $rowHolder
+	rm -f $sortedFile
+	rm -f $averageHolder
+	rm -f $medianHolder
+	exit 1
+fi
+
+#Remove the temporary files
+rm -f $dataFile
+rm -f $rowHolder
+rm -f $sortedFile
+rm -f $averageHolder
+rm -f $medianHolder
